@@ -73,3 +73,23 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Expo 殘留（如果之後不小心跑過 expo）
+.expo/
+.expo-shared/
+
+# 環境變數/密鑰
+.env
+
+#（可選）Android 由 react-native-asset 產生的拷貝，避免重複版本控管
+# 如果你想保留也可以不要忽略
+android/app/src/main/assets/*
+
+# 打包輸出（有時會手動產生）
+*.apk
+*.aab
+
+# RN linked assets (generated)
+android/app/src/main/assets/
+android/link-assets-manifest.json
+ios/link-assets-manifest.json
