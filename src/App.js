@@ -1,6 +1,6 @@
 // src/App.js
 import 'react-native-gesture-handler';
-import React, {useState, useContext} from 'react';
+import React, {useState, useContext, useEffect} from 'react';
 import {
   StatusBar,
   StyleSheet,
@@ -14,6 +14,8 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  InteractionManager,
+  Animated,
 } from 'react-native';
 
 import {NavigationContainer, useNavigation} from '@react-navigation/native';
@@ -25,14 +27,20 @@ import AntDesign from 'react-native-vector-icons/AntDesign';
 import FontAwesome5 from 'react-native-vector-icons/FontAwesome5';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
-import {CartProvider, CartContext} from '../CartContext';
+import {CartProvider, CartContext} from './context/CartContext';
+import RNBootSplash from 'react-native-bootsplash';
+import { BlurView } from '@react-native-community/blur';
+
+// 🔐 Auth flow 4 個畫面（你已建立於 src/auth/AuthScreens.js）
+import { LoginScreen, ForgotPasswordScreen, VerifyScreen, SignUpScreen } from './auth/AuthScreens';
 
 // 螢幕寬度
 const screenWidth = Dimensions.get('window').width;
 
 // Tab / Stack
 const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator();
+const Stack = createStackNavigator();          // 給 Explore 的內層 Stack
+const RootStack = createStackNavigator();      // 🔝 最外層 RootStack（含 Auth + Main）
 
 // === Demo 資料 ===
 const recipesData = [
@@ -73,13 +81,13 @@ const productsData = [
 
 const categories1 = [
   {id: 'all', name: 'All', icon: null, active: true},
-  {id: 'rice', name: '飯食類', icon: null},
-  {id: 'noodle', name: '麵食類', icon: null},
-  {id: 'soup', name: '湯品/鍋物類', icon: null},
-  {id: 'braised dishes', name: '燉滷類', icon: null},
-  {id: 'stir-fried', name: '熱炒類', icon: null},
-  {id: 'steaming', name: '蒸煮類', icon: null},
-  {id: 'fried food', name: '煎炸類', icon: null},
+  {id: 'rice', name: '飯食類', icon: null, image: require('../assets/classification_pic/rice.jpg')},
+  {id: 'noodle', name: '麵食類', icon: null, image: require('../assets/classification_pic/noodle.jpg')},
+  {id: 'soup', name: '湯品/鍋物類', icon: null, image: require('../assets/classification_pic/soup.jpg')},
+  {id: 'braised_dishes', name: '燉滷類', icon: null, image: require('../assets/classification_pic/braised_dishes.png')},
+  {id: 'stir-fried', name: '熱炒類', icon: null, image: require('../assets/classification_pic/stir-fried.jpg')},
+  {id: 'steaming', name: '蒸煮類', icon: null, image: require('../assets/classification_pic/steaming.jpg')},
+  {id: 'fried_food', name: '煎炸類', icon: null, image: require('../assets/classification_pic/fried_food.jpg')},
   {id: 'other', name: '其他', icon: null},
 ];
 
@@ -97,15 +105,21 @@ const categories2 = [
 function HomeScreen() {
   const [activeCategory, setActiveCategory] = useState('all');
 
+  const HEADER_HEIGHT = 218;
+  const scrollY = React.useRef(new Animated.Value(0)).current;
+  const bgOpacity = scrollY.interpolate({
+    inputRange: [0, 40, 120],
+    outputRange: [1, 0.85, 1.5],     // ← 透明度建議 1 → 0.6
+    extrapolate: 'clamp',
+  });
+
   const handleRecipePress = () => {
     console.log('推薦食譜按鈕被點擊了！');
     alert('功能待開發！');
   };
 
   const renderRecipeItem = ({item}) => (
-    <TouchableOpacity
-      style={styles.recipeCard}
-      onPress={() => console.log('點擊了食譜:', item.title)}>
+    <TouchableOpacity style={styles.recipeCard} onPress={() => console.log('點擊了食譜:', item.title)}>
       <View style={styles.recipeTextContent}>
         <View style={styles.recipeTitleRow}>
           <Text style={styles.recipeTitle}>{item.title}</Text>
@@ -121,50 +135,84 @@ function HomeScreen() {
 
   return (
     <View style={styles.homeScreenContainer}>
-      <View style={styles.headerTextBlock}>
-        <Text style={styles.hualienTextInHome}>花蓮好食智慧聊</Text>
-        <Text style={styles.subtitleTextInHome}>今天來煮點什麼呢！</Text>
-      </View>
-
-      <View style={styles.topHorizontalLine} />
-
-      <View style={styles.recipeButtonsContainer}>
-        <TouchableOpacity style={styles.recipeButton1InHome} onPress={handleRecipePress} activeOpacity={0.7}>
-          <Text style={styles.recipeButtonText1}>推薦食譜</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.recipeButton2InHome} onPress={handleRecipePress} activeOpacity={0.7}>
-          <Text style={styles.recipeButtonText2}>已收藏食譜</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.buttonUnderlineLeft} />
-      <View style={styles.buttonUnderlineRight} />
-
-      <View style={styles.categoryNavigationWrapper1}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScrollViewContent}>
-          {categories1.map(category => (
-            <TouchableOpacity
-              key={category.id}
-              style={[styles.categoryButton, activeCategory === category.id && styles.categoryButtonActive]}
-              onPress={() => setActiveCategory(category.id)}>
-              {category.icon && <Image source={category.icon} style={styles.categoryButtonIcon} />}
-              <Text style={[styles.categoryButtonText, activeCategory === category.id && styles.categoryButtonTextActive]}>
-                {category.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-
-      <FlatList
+      <Animated.FlatList
         data={recipesData}
         renderItem={renderRecipeItem}
         keyExtractor={item => item.id}
-        contentContainerStyle={styles.recipeListContent}
+        contentContainerStyle={[styles.recipeListContent, {paddingTop: HEADER_HEIGHT}]}
         style={styles.recipeList}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true }
+        )}
+        scrollEventThrottle={16}
       />
 
-      {/* 原生 StatusBar */}
+      <View style={[styles.headerContainer, {height: HEADER_HEIGHT}]}>
+        <Animated.View style={[styles.headerBg, { opacity: bgOpacity }]}>
+          <BlurView
+            style={StyleSheet.absoluteFill}
+            blurType="light"
+            blurAmount={12}
+            reducedTransparencyFallbackColor="white"
+          />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.5)' }]} />
+        </Animated.View>
+
+        <View style={styles.headerTextBlock}>
+          <Text style={styles.hualienTextInHome}>花蓮好食智慧聊</Text>
+          <Text style={styles.subtitleTextInHome}>今天來煮點什麼呢！</Text>
+        </View>
+
+        <View style={styles.topHorizontalLine} />
+
+        <View style={styles.recipeButtonsContainer}>
+          <TouchableOpacity style={styles.recipeButton1InHome} onPress={handleRecipePress} activeOpacity={0.7}>
+            <Text style={styles.recipeButtonText1}>推薦食譜</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.recipeButton2InHome} onPress={handleRecipePress} activeOpacity={0.7}>
+            <Text style={styles.recipeButtonText2}>已收藏食譜</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.buttonUnderlineLeft} />
+        <View style={styles.buttonUnderlineRight} />
+
+        <View style={styles.categoryNavigationWrapper1}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.catStripContent}>
+            {categories1.map(category => {
+              const isActive = activeCategory === category.id;
+
+              if (category.id === 'all') {
+                return (
+                  <TouchableOpacity key={category.id} activeOpacity={0.85} onPress={() => setActiveCategory(category.id)}>
+                    <View style={[styles.catAll, isActive && styles.catChipActive]}>
+                      <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }
+
+              return (
+                <TouchableOpacity
+                  key={category.id}
+                  activeOpacity={0.85}
+                  onPress={() => setActiveCategory(category.id)}
+                  style={[styles.catChip, isActive && styles.catChipActive]}
+                >
+                  {category.image && (
+                    <View style={[styles.catImgWrap, isActive && styles.catImgWrapActive]}>
+                      <Image source={category.image} style={styles.catImg} />
+                    </View>
+                  )}
+                  <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+
       <StatusBar barStyle="dark-content" />
     </View>
   );
@@ -258,19 +306,45 @@ function ExploreScreen() {
         <Ionicons name="cart-outline" size={30} color="black" />
       </TouchableOpacity>
 
+      {/* 食品分類導航 (可左右滑動) */}
       <View style={styles.categoryNavigationWrapper2}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScrollViewContent}>
-          {categories2.map(category => (
-            <TouchableOpacity
-              key={category.id}
-              style={[styles.categoryButton, activeCategory === category.id && styles.categoryButtonActive]}
-              onPress={() => setActiveCategory(category.id)}>
-              {category.icon && <Image source={category.icon} style={styles.categoryButtonIcon} />}
-              <Text style={[styles.categoryButtonText, activeCategory === category.id && styles.categoryButtonTextActive]}>
-                {category.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.catStripContent}
+        >
+          {categories2.map((category) => {
+            const isActive = activeCategory === category.id;
+
+            if (category.id === 'all') {
+              return (
+                <TouchableOpacity
+                  key={category.id}
+                  activeOpacity={0.85}
+                  onPress={() => setActiveCategory(category.id)}
+                >
+                  <View style={[styles.catAll, isActive && styles.catChipActive]}>
+                    <Text style={[styles.catText, isActive && styles.catTextActive]}>
+                      {category.name}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            }
+
+            return (
+              <TouchableOpacity
+                key={category.id}
+                activeOpacity={0.85}
+                onPress={() => setActiveCategory(category.id)}
+                style={[styles.catChip, isActive && styles.catChipActive]}
+              >
+                <Text style={[styles.catText, isActive && styles.catTextActive]}>
+                  {category.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -421,63 +495,86 @@ function ExploreStackScreen() {
   );
 }
 
-// === App Root ===
+/** ===================== MainTabs（你原本的三個分頁） ===================== **/
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      initialRouteName="Home"
+      screenOptions={({route}) => ({
+        tabBarIcon: ({focused, color}) => {
+          let iconName; let IconComponent = null; let iconSize = 24;
+
+          if (route.name === 'Home') {
+            IconComponent = MaterialCommunityIcons;
+            iconName = focused ? 'home' : 'home-outline';
+            iconSize = 25;
+          } else if (route.name === 'SpecialCenter') {
+            IconComponent = MaterialCommunityIcons;
+            iconName = focused ? 'cube' : 'cube-outline';
+            iconSize = 38;
+            return (
+              <View style={styles.specialButtonContainer}>
+                <IconComponent name={iconName} size={iconSize} color={focused ? '#fff' : '#000'} />
+              </View>
+            );
+          } else if (route.name === 'Explore') {
+            IconComponent = FontAwesome5;
+            iconName = 'compass';
+          }
+
+          if (!IconComponent) return <View />;
+          return <IconComponent name={iconName} size={iconSize} color={color} />;
+        },
+        tabBarActiveTintColor: '#FC6E2A',
+        tabBarInactiveTintColor: 'gray',
+        tabBarStyle: styles.tabBarStyle,
+        tabBarShowLabel: false,
+        headerShown: false,
+      })}
+    >
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="SpecialCenter" component={SpecialCenterScreen} />
+      <Tab.Screen name="Explore" component={ExploreStackScreen} />
+    </Tab.Navigator>
+  );
+}
+
+/** ===================== App Root：Auth + Main ===================== **/
 export default function App() {
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      RNBootSplash.hide({ fade: true });
+    });
+    return () => task.cancel?.();
+  }, []);
+
   return (
     <CartProvider>
       <View style={styles.appContainer}>
         <NavigationContainer>
-          <Tab.Navigator
-            initialRouteName="Home"
-            screenOptions={({route}) => ({
-              tabBarIcon: ({focused, color, size}) => {
-                let iconName; let IconComponent = null; let iconSize = 24;
-
-                if (route.name === 'Home') {
-                  IconComponent = MaterialCommunityIcons;
-                  iconName = focused ? 'home' : 'home-outline';
-                  iconSize = 25;
-                } else if (route.name === 'SpecialCenter') {
-                  IconComponent = MaterialCommunityIcons;
-                  iconName = focused ? 'cube' : 'cube-outline';
-                  iconSize = 38;
-                  return (
-                    <View style={styles.specialButtonContainer}>
-                      <IconComponent name={iconName} size={iconSize} color={focused ? '#fff' : '#000'} />
-                    </View>
-                  );
-                } else if (route.name === 'Explore') {
-                  IconComponent = FontAwesome5;
-                  iconName = 'compass';
-                }
-
-                if (!IconComponent) return <View />;
-                return <IconComponent name={iconName} size={iconSize} color={color} />;
-              },
-              tabBarActiveTintColor: '#FC6E2A',
-              tabBarInactiveTintColor: 'gray',
-              tabBarStyle: styles.tabBarStyle,
-              tabBarShowLabel: false,
-              headerShown: false,
-            })}>
-            <Tab.Screen name="Home" component={HomeScreen} />
-            <Tab.Screen name="SpecialCenter" component={SpecialCenterScreen} />
-            <Tab.Screen name="Explore" component={ExploreStackScreen} />
-          </Tab.Navigator>
+          <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Login">
+            {/* Auth flow */}
+            <RootStack.Screen name="Login" component={LoginScreen} />
+            <RootStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+            <RootStack.Screen name="Verify" component={VerifyScreen} />
+            <RootStack.Screen name="SignUp" component={SignUpScreen} />
+            {/* 登入後的主程式 */}
+            <RootStack.Screen name="Main" component={MainTabs} />
+          </RootStack.Navigator>
         </NavigationContainer>
       </View>
     </CartProvider>
   );
 }
 
-// === Styles（你的原樣式，僅把字串數字改為數字；若有不需要可自行精簡） ===
+// === Styles（你的原樣式） ===
 const styles = StyleSheet.create({
   appContainer: {flex: 1, backgroundColor: 'white'},
   homeScreenContainer: {flex: 1, backgroundColor: '#fff'},
   tabBarStyle: {
     position: 'absolute',
     bottom: 0, left: 0, right: 0,
-    height: 100,
+    height: 70,
     backgroundColor: 'white',
     borderTopWidth: 0,
     elevation: 5,
@@ -485,7 +582,7 @@ const styles = StyleSheet.create({
     shadowOffset: {width: 0, height: -2},
     shadowOpacity: 0.1,
     shadowRadius: 5,
-    paddingTop: 5,
+    paddingTop: 10,
     paddingBottom: 20,
   },
   specialButtonContainer: {
@@ -500,27 +597,29 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 8,
   },
-  headerTextBlock: {position: 'absolute', left: 87, top: 48, zIndex: 10},
+  headerTextBlock: {position: 'absolute', left: 30, top: 30, zIndex: 10},
   hualienTextInHome: {fontWeight: 'bold', fontSize: 20, color: '#FC6E2A'},
   subtitleTextInHome: {fontFamily: 'Arial', fontSize: 12, color: '#676767', marginTop: 2},
-  topHorizontalLine: {position: 'absolute', left: 0, width: screenWidth, height: 2, top: 110, backgroundColor: '#F9F8F8', zIndex: 5},
-  recipeButtonsContainer: {flexDirection: 'row', justifyContent: 'space-between', position: 'absolute', top: 120, width: screenWidth - 30, left: 15, zIndex: 10},
+  topHorizontalLine: {position: 'absolute', left: 0, width: screenWidth, height: 2, top: 92, backgroundColor: '#F9F8F8', zIndex: 5},
+  recipeButtonsContainer: {flexDirection: 'row', justifyContent: 'space-between', position: 'absolute', top: 102, width: screenWidth - 30, left: 15, zIndex: 10},
   recipeButton1InHome: {width: (screenWidth - 40) / 2, height: 30, backgroundColor: '#FFFFFF', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 50, justifyContent: 'center', alignItems: 'center'},
   recipeButtonText1: {color: '#000000', fontFamily: 'Arial', fontSize: 12},
   recipeButton2InHome: {width: (screenWidth - 40) / 2, height: 30, backgroundColor: '#FFFFFF', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 50, justifyContent: 'center', alignItems: 'center'},
   recipeButtonText2: {color: '#000000', fontFamily: 'Arial', fontSize: 12},
-  buttonUnderlineLeft: {position: 'absolute', left: 15, width: (screenWidth - 40) / 2, height: 5, top: 150, backgroundColor: '#B6B6B6', zIndex: 5},
-  buttonUnderlineRight: {position: 'absolute', left: 15 + (screenWidth - 40) / 2 + 10, width: (screenWidth - 40) / 2, height: 5, top: 150, backgroundColor: '#B6B6B6', zIndex: 5},
-  categoryNavigationWrapper1: {position: 'absolute', left: 0, width: screenWidth, top: 170},
-  categoryNavigationWrapper2: {position: 'absolute', left: 0, width: screenWidth, top: 120},
-  recipeList: {marginTop: 218, flex: 1},
+  buttonUnderlineLeft: {position: 'absolute', left: 15, width: (screenWidth - 40) / 2, height: 5, top: 140, backgroundColor: '#B6B6B6', zIndex: 5},
+  buttonUnderlineRight: {position: 'absolute', left: 15 + (screenWidth - 40) / 2 + 10, width: (screenWidth - 40) / 2, height: 5, top: 140, backgroundColor: '#B6B6B6', zIndex: 5},
+  categoryNavigationWrapper1: {position: 'absolute', left: 0, width: screenWidth, top: 150},
+  categoryNavigationWrapper2: {position: 'absolute', left: 0, width: screenWidth, top: 90},
+  headerContainer: {position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10},
+  headerBg: {...StyleSheet.absoluteFillObject, overflow: 'hidden'},
+  recipeList: {flex: 1},
   recipeListContent: {paddingBottom: 90, paddingHorizontal: 15},
   recipeCard: {
-    flexDirection: 'row', backgroundColor: '#FFD8C0', borderRadius: 20, marginVertical: 6,
+    flexDirection: 'row', backgroundColor: '#FFD8C0', borderRadius: 50, marginVertical: 10,
     shadowColor: '#000', shadowOffset: {width: 5, height: 5}, shadowOpacity: 0.1, shadowRadius: 5, elevation: 5, overflow: 'hidden',
     width: screenWidth - 30,
   },
-  recipeTextContent: {flex: 2, padding: 15, justifyContent: 'center'},
+  recipeTextContent: {flex: 8, justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 25},
   recipeTitleRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5},
   recipeTitle: {fontWeight: 'bold', fontSize: 18, color: '#FC6E2A'},
   recipeDescription: {fontWeight: 'bold', fontSize: 12, color: '#000000b6', marginBottom: 10},
@@ -529,11 +628,11 @@ const styles = StyleSheet.create({
   recipeImage: {flex: 1, width: '100%', height: '100%', resizeMode: 'cover', minWidth: 100},
 
   // Explore
-  shoppingCartButton: {left: 340, top: 50, width: 50, height: 50, borderRadius: 50, backgroundColor: '#E6E6E6', justifyContent: 'center', alignItems: 'center'},
+  shoppingCartButton: {left: 320, top: 30, width: 50, height: 50, borderRadius: 50, backgroundColor: '#E6E6E6', justifyContent: 'center', alignItems: 'center'},
   productListHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginTop: 10, marginBottom: 10},
-  productListTitle: {fontWeight: 'bold', fontSize: 20, color: '#32343E', left: 5, top: 173},
-  seeAllText: {fontFamily: 'Arial', fontSize: 16, color: '#333333', top: 173},
-  productList: {marginTop: 185, flex: 1, paddingHorizontal: 15},
+  productListTitle: {fontWeight: 'bold', fontSize: 20, color: '#32343E', left: 10, top: 125},
+  seeAllText: {fontFamily: 'Arial', fontSize: 16, color: '#333333', left: 8, top: 125},
+  productList: {marginTop: 130, flex: 1, paddingHorizontal: 15},
   productListContent: {paddingBottom: 90},
   row: {justifyContent: 'space-between'},
   productCard: {backgroundColor: '#F6F6F6', borderRadius: 20, width: screenWidth / 2 - 34, height: 230, marginVertical: 8, marginHorizontal: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.1, shadowRadius: 5, elevation: 5, overflow: 'hidden'},
@@ -541,6 +640,25 @@ const styles = StyleSheet.create({
   productInfo: {padding: 10},
   productName: {fontWeight: 'bold', fontSize: 15, color: '#333', marginBottom: 3},
   productBrand: {fontFamily: 'Arial', fontSize: 12, color: '#666'},
+
+  // ScrollView 分類列
+  catStripContent: { paddingHorizontal: 16, paddingVertical: 10 },
+  catAll: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: '#FFFFFF',
+    borderWidth: 1, borderColor: '#EFEFEF', alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2,
+  },
+  catChip: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF',
+    borderWidth: 1, borderColor: '#EFEFEF', paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 28, marginRight: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2,
+  },
+  catChipActive: { backgroundColor: '#FFF2E8', borderColor: '#FFC9A3', shadowOpacity: 0.12, elevation: 3 },
+  catText: { fontSize: 14, color: '#333', fontWeight: '600' },
+  catTextActive: { color: '#FC6E2A' },
+  catImgWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF7EF', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  catImgWrapActive: { backgroundColor: '#FFDCC6' },
+  catImg: { width: 40, height: 40, resizeMode: 'contain', borderRadius: 100 },
 
   // 購物車
   shoppingCartPage: {flex: 1, backgroundColor: '#fff'},
@@ -590,10 +708,12 @@ const styles = StyleSheet.create({
   purchaseContainer: {marginTop: 30, alignSelf: 'stretch'},
   purchaseTitle: {fontSize: 18, fontWeight: 'bold', color: '#333', marginTop: 30, marginLeft: 5, marginBottom: 30},
   purchaseLocation: {fontSize: 16, marginTop: 5, color: '#666', marginBottom: 50},
-  addToCartButton: {backgroundColor: '#FC6E2A', paddingVertical: 12, paddingHorizontal: 15, borderRadius: 50},
-  addToCartButtonText: {color: '#fff', fontFamily: 'Sen-Bold', fontSize: 15},
-  quantitySelector: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginVertical: 30},
-  quantityButton: {width: 40, height: 40, backgroundColor: '#f0f0f0', borderRadius: 20, justifyContent: 'center', alignItems: 'center'},
-  quantityButtonText: {fontSize: 20, fontWeight: 'bold', color: '#333'},
-  quantityValue: {fontSize: 22, fontWeight: 'bold', marginHorizontal: 20},
+  addToCartButton: { backgroundColor: '#FC6E2A', paddingVertical: 12, paddingHorizontal: 15, borderRadius: 50 },
+  addToCartButtonText: { color: '#fff', fontFamily: 'Sen-Bold', fontSize: 15 },
+
+  quantitySelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginVertical: 30 },
+  quantityButton: { width: 40, height: 40, backgroundColor: '#f0f0f0', borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  quantityButtonText: { fontSize: 20, fontWeight: 'bold', color: '#333' },
+  quantityValue: { fontSize: 22, fontWeight: 'bold', marginHorizontal: 20 },
 });
+123
