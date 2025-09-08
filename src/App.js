@@ -56,7 +56,7 @@ const PRODUCTS_CSV_URL =
   'https://docs.google.com/spreadsheets/d/e/2PACX-1vT06UBF-WPWNW8pZ6_8XkeZRMsibFYoXMD5AeeJCZQbZAZWTHpzm71vaRn4igT-V_0kB4Y73snXV-rh/pub?output=csv';
 
 // 地圖查詢彈窗要顯示的圖片（把你的地圖圖存到 assets/static_map.png）
-const MAP_IMAGE = require('../assets/static_map.png');
+const MAP_IMAGE = require('../assets/static_map/hualien_map.png');
 
 /** =========================
  *  小型 CSV 解析器
@@ -514,32 +514,53 @@ function ExploreScreen() {
         const rows = parseCSV(text);
         if (!rows.length) throw new Error('空白 CSV');
 
-        const header = rows[0].map(h => (h || '').trim());
-        const idx = names => header.findIndex(h => names.some(n => h === n || h.toLowerCase() === n.toLowerCase()));
+        // 去空白/符號的小工具，讓比對更寬鬆
+        const norm = s =>
+          (s || '')
+            .toLowerCase()
+            .replace(/\s|　/g, '')       // 所有半/全形空白
+            .replace(/[^\p{L}\p{N}]+/gu, ''); // 去掉非文字與數字
 
-        const cId       = idx(['id','ID','編號']);
-        const cName     = idx(['產品名稱','品名','name','名稱','title']);
-        const cCat      = idx(['分類','類別','category']);
-        const cIntro    = idx(['產品介紹','介紹','說明','描述','intro']);
-        const cBuy      = idx(['去哪裡購買','哪裡可以購買','購買','購買資訊','where to buy']);
-        const cImg      = idx(['產品圖片','圖片URL','圖片','image','imageurl']);
-        const cOrigin   = idx(['產地','來源','產區','origin']);
-        const cStory    = idx(['小農故事','品牌故事','故事','story']);
+        const headerRaw = rows[0].map(h => (h || '').trim());
+        const header = headerRaw.map(norm);
+
+        const findCol = (candidates) => {
+          const cands = candidates.map(norm);
+          let idx = header.findIndex(h =>
+            cands.includes(h) || cands.some(c => h.includes(c) || c.includes(h))
+          );
+          return idx; // -1 代表沒找到
+        };
+
+        // 常見同義字都列進來
+        const cId     = findCol(['id','編號','項次']);
+        const cName   = findCol(['產品名稱','品名','名稱','title','name']);
+        const cCat    = findCol(['分類','類別','category']);
+        const cIntro  = findCol(['產品介紹','介紹','說明','描述','intro','description']);
+        const cBuy    = findCol([
+          '去哪裡購買','哪裡可以購買','在哪裡購買','購買資訊','購買連結','購買地點',
+          '販售通路','販售地點','銷售據點','where to buy','buy','購買'
+        ]);
+        const cImg    = findCol(['產品圖片','圖片url','圖片','image','imageurl','image link']);
+        const cOrigin = findCol(['產地','來源','產區','origin']);
+        const cStory  = findCol(['小農故事','品牌故事','故事','story']);
 
         const data = rows.slice(1)
           .filter(r => r.some(c => (c || '').trim() !== ''))
           .map((r, i) => {
-            const catText = (r[cCat] || '').trim();
+            const get = (idx) => (idx >= 0 ? (r[idx] || '').trim() : '');
+
+            const catText = get(cCat);
             return {
-              id: (r[cId] || String(i + 1)).trim(),
-              name: (r[cName] || '').trim(),
+              id: get(cId) || String(i + 1),
+              name: get(cName),
               category: mapCategoryTextToId(catText),
               categoryText: catText,
-              intro: (r[cIntro] || '').trim(),
-              whereToBuy: (r[cBuy] || '').trim(),
-              imageUrl: (r[cImg] || '').trim(),
-              origin: (r[cOrigin] || '').trim(),
-              story: (r[cStory] || '').trim(),
+              intro: get(cIntro),
+              whereToBuy: get(cBuy),
+              imageUrl: get(cImg),
+              origin: get(cOrigin),
+              story: get(cStory),
             };
           })
           .filter(p => p.name);
@@ -571,8 +592,12 @@ function ExploreScreen() {
           <View style={[styles.productImage, { backgroundColor: '#eee' }]} />
         )}
         <View style={styles.productInfo}>
-          <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-          <Text style={styles.productBrand} numberOfLines={1}>{item.origin || '—'}</Text>
+          <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">
+            {item.name}
+          </Text>
+          <Text style={styles.productBrand} numberOfLines={1} ellipsizeMode="tail">
+            {item.origin || '—'}
+          </Text>
         </View>
       </TouchableOpacity>
     );
@@ -625,7 +650,7 @@ function ExploreScreen() {
       <View style={styles.productListHeader}>
         <Text style={styles.productListTitle}>產品品牌</Text>
         <TouchableOpacity onPress={() => setMapVisible(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Text style={styles.seeAllText}>地圖查詢</Text>
+          <Text style={styles.mapSearchText}>地圖查詢</Text>
         </TouchableOpacity>
       </View>
 
@@ -762,6 +787,14 @@ function ProductDetailScreen({ route }) {
           <TouchableOpacity style={styles.addToCartButton} onPress={() => addToCart(product, quantity)}>
             <Text style={styles.addToCartButtonText}>加入購物車</Text>
           </TouchableOpacity>
+
+          {/* 產品介紹 */}
+          {!!product?.intro && (
+            <View style={styles.purchaseContainer}>
+              <Text style={styles.purchaseTitle}>|  產品介紹  |</Text>
+              <Text style={styles.purchaseLocation}>{product.intro}</Text>
+            </View>
+          )}
 
           {/* 去哪裡購買 */}
           {!!whereToBuy && (
@@ -985,13 +1018,13 @@ const styles = StyleSheet.create({
   shoppingCartButton: {left: 320, top: 30, width: 50, height: 50, borderRadius: 50, backgroundColor: '#E6E6E6', justifyContent: 'center', alignItems: 'center'},
   productListHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginTop: 10, marginBottom: 10},
   productListTitle: {fontWeight: 'bold', fontSize: 20, color: '#32343E', left: 10, top: 125},
-  seeAllText: {fontFamily: 'Arial', fontSize: 16, color: '#333333', left: 8, top: 125},
+  mapSearchText: {fontFamily: 'Arial', fontSize: 16, color: '#333333', left: -5, top: 125},
   productList: {marginTop: 130, flex: 1, paddingHorizontal: 15},
   productListContent: {paddingBottom: 90},
   row: {justifyContent: 'space-between'},
   productCard: {backgroundColor: '#F6F6F6', borderRadius: 20, width: screenWidth / 2 - 34, height: 230, marginVertical: 8, marginHorizontal: 10, shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.1, shadowRadius: 5, elevation: 5, overflow: 'hidden'},
   productImage: {width: '100%', height: 165, resizeMode: 'cover', borderTopLeftRadius: 10, borderTopRightRadius: 10},
-  productInfo: {padding: 10},
+  productInfo: { padding: 10, minHeight: 58, justifyContent: 'space-between' },
   productName: {fontWeight: 'bold', fontSize: 15, color: '#333', marginBottom: 3},
   productBrand: {fontFamily: 'Arial', fontSize: 12, color: '#666'},
 
