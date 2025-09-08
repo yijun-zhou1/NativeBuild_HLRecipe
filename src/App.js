@@ -1,6 +1,6 @@
 // src/App.js
 import 'react-native-gesture-handler';
-import React, {useState, useContext, useEffect} from 'react';
+import React, {useState, useContext, useEffect, useRef} from 'react';
 import {
   StatusBar,
   StyleSheet,
@@ -16,6 +16,9 @@ import {
   Platform,
   InteractionManager,
   Animated,
+  Modal,
+  ActivityIndicator,
+  Pressable,
 } from 'react-native';
 
 import {NavigationContainer, useNavigation} from '@react-navigation/native';
@@ -27,49 +30,139 @@ import AntDesign from 'react-native-vector-icons/AntDesign';
 import FontAwesome5 from 'react-native-vector-icons/FontAwesome5';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
+import AsyncStorage from '@react-native-async-storage/async-storage'; // ← 新增
+
 import {CartProvider, CartContext} from './context/CartContext';
 import RNBootSplash from 'react-native-bootsplash';
 import { BlurView } from '@react-native-community/blur';
 
-// 🔐 Auth flow 4 個畫面（你已建立於 src/auth/AuthScreens.js）
+// 🔐 Auth flow（你已有）
 import { LoginScreen, ForgotPasswordScreen, VerifyScreen, SignUpScreen } from './auth/AuthScreens';
+
+// ======= 你的 Google 試算表（CSV） =======
+const CSV_URL =
+  'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCKhNS58hvoVKgYAbxURlrGp08qlXvp3Z-8Nb8j0E--wqCGuaXG1DXqaXtRIsJe-VvsIn2WplgV7LT/pub?output=csv';
 
 // 螢幕寬度
 const screenWidth = Dimensions.get('window').width;
 
 // Tab / Stack
 const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator();          // 給 Explore 的內層 Stack
-const RootStack = createStackNavigator();      // 🔝 最外層 RootStack（含 Auth + Main）
+const Stack = createStackNavigator();
+const RootStack = createStackNavigator();
 
-// === Demo 資料 ===
-const recipesData = [
-  {
-    id: '1',
-    title: '揚州炒飯',
-    description: '揚州炒飯是中式炒飯的經典代表，食材豐富，色彩鮮豔，味道鹹香。',
-    ingredients:
-      '白飯 2碗（隔夜飯最佳）、蝦仁 80克（去腸泥，洗淨）、叉燒肉 50克（切丁）、青豆仁 30克（冷凍）、雞蛋 2顆（打散）、玉米粒 30克（冷凍）、紅蘿蔔丁 30克（冷凍）、蔥花 2湯匙、醬油 1湯匙、鹽 少許、白胡椒粉 少許。',
-    image: require('../assets/recipe_pic/揚州炒飯.jpg'),
-  },
-  {
-    id: '2',
-    title: '韓式泡菜豬肉蓋飯',
-    description: '酸辣開胃的泡菜豬肉，搭配熱騰騰的白飯，簡單快速又美味。',
-    ingredients:
-      '豬梅花肉片 150克（切小片）、韓式泡菜 100克（切小段）、洋蔥 1/4顆（切絲）、青蔥 1根（切蔥花）、蒜末 1湯匙、韓式辣醬 1湯匙、醬油 1茶匙、糖 1茶匙、米酒 1湯匙、水 50毫升、白飯 適量、雞蛋 1顆（煎成半熟蛋）。',
-    image: require('../assets/recipe_pic/韓式泡菜豬肉蓋飯.jpg'),
-  },
-  {
-    id: '3',
-    title: '咖哩燴飯',
-    description: '濃郁的咖哩醬汁搭配米飯，是經典的日式或台式家常料理。',
-    ingredients:
-      '豬肉或雞肉 200克（切塊）、馬鈴薯 1顆（去皮切塊）、紅蘿蔔 1/2根（去皮切塊）、洋蔥 1/2顆（切塊）、咖哩塊 2塊、水 500毫升、沙拉油 適量、白飯 適量。',
-    image: require('../assets/recipe_pic/咖哩燴飯.jpeg'),
-  },
-];
+// 農產品（Explore）使用的 Google 試算表（請用 CSV 輸出）
+const PRODUCTS_CSV_URL =
+  'https://docs.google.com/spreadsheets/d/e/2PACX-1vT06UBF-WPWNW8pZ6_8XkeZRMsibFYoXMD5AeeJCZQbZAZWTHpzm71vaRn4igT-V_0kB4Y73snXV-rh/pub?output=csv';
 
+// 地圖查詢彈窗要顯示的圖片（把你的地圖圖存到 assets/static_map.png）
+const MAP_IMAGE = require('../assets/static_map.png');
+
+/** =========================
+ *  小型 CSV 解析器
+ *  ========================= */
+function parseCSV(text) {
+  const rows = [];
+  let cur = '';
+  let row = [];
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (inQuotes) {
+      if (ch === '"' && next === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(cur);
+        cur = '';
+      } else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && next === '\n') i++;
+        row.push(cur);
+        rows.push(row);
+        row = [];
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+  }
+  if (cur.length || row.length) {
+    row.push(cur);
+    rows.push(row);
+  }
+  return rows.filter(r => r.length > 0);
+}
+
+/** =========================
+ *  免責聲明 Modal（新增）
+ *  ========================= */
+const DisclaimerModal = ({visible, onAgree, onDecline}) => {
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    if (!visible) setChecked(false);
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View style={styles.disclaimerBackdrop}>
+        <View style={styles.disclaimerCard}>
+          <Text style={styles.disclaimerTitle}>免責聲明</Text>
+
+          <ScrollView
+            style={styles.disclaimerBody}
+            contentContainerStyle={{paddingBottom: 8}}
+            showsVerticalScrollIndicator>
+            <Text style={styles.disclaimerParagraph}>
+              使用「花蓮好食智慧聊」即表示你了解並同意：本 app 之食譜、營養與烹飪建議僅供參考，非醫療或專業意見；實作料理請自行評估風險並注意廚房安全。若有過敏、特殊飲食或健康問題，請先諮詢專業人員。
+            </Text>
+            <Text style={styles.disclaimerParagraph}>
+              平台整合之在地小農商品資訊、價格與庫存可能隨時變動，實際出貨、品質、售後與退換貨由各商家自行負責；本平台不承擔因此產生之損失或糾紛。
+            </Text>
+            <Text style={styles.disclaimerParagraph}>
+              AI 聊天回覆可能不完整或有誤，僅供參考，請自行判斷使用。圖片多為示意，實品以商家資訊為準。繼續使用即代表你同意本服務條款與隱私權政策。
+            </Text>
+          </ScrollView>
+
+          <TouchableOpacity
+            style={styles.disclaimerCheckRow}
+            onPress={() => setChecked(v => !v)}
+            activeOpacity={0.85}>
+            <View style={[styles.disclaimerCheckbox, checked && styles.disclaimerCheckboxOn]}>
+              {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
+            </View>
+            <Text style={styles.disclaimerCheckText}>我已閱讀並同意</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            disabled={!checked}
+            onPress={onAgree}
+            activeOpacity={0.9}
+            style={[styles.disclaimerPrimaryBtn, !checked && {opacity: 0.5}]}>
+            <Text style={styles.disclaimerPrimaryText}>同意並繼續</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={onDecline} style={styles.disclaimerGhostBtn} activeOpacity={0.7}>
+            <Text style={styles.disclaimerGhostText}>不同意，返回登入</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// === Demo（Explore / 購物） ===
 const productsData = [
   {id: '1', name: '銀川有機米', brand: '花蓮縣富里鄉', image: require('../assets/product_rice_pic/rice_1.jpg')},
   {id: '2', name: '富麗有機米', brand: '花蓮縣富里鄉', image: require('../assets/product_rice_pic/rice_2.jpg')},
@@ -101,61 +194,139 @@ const categories2 = [
   {id: 'drink2', name: '其他', icon: null},
 ];
 
-// === 首頁 ===
+/* ===================== 首頁（抓 Google 試算表） ===================== */
 function HomeScreen() {
   const [activeCategory, setActiveCategory] = useState('all');
 
+  // Header 動畫
   const HEADER_HEIGHT = 218;
-  const scrollY = React.useRef(new Animated.Value(0)).current;
+  const scrollY = useRef(new Animated.Value(0)).current;
   const bgOpacity = scrollY.interpolate({
     inputRange: [0, 40, 120],
-    outputRange: [1, 0.85, 1.5],     // ← 透明度建議 1 → 0.6
+    outputRange: [1, 0.85, 1.5],
     extrapolate: 'clamp',
   });
 
-  const handleRecipePress = () => {
-    console.log('推薦食譜按鈕被點擊了！');
-    alert('功能待開發！');
+  // 來自 Google Sheets 的資料
+  const [recipes, setRecipes] = useState([]);   // { id, title, intro, ingredients, steps, imageUrl, category }
+  const [loading, setLoading] = useState(true);
+  const [sheetErr, setSheetErr] = useState('');
+
+  // 詳細面板
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selectedRecipe, setSelectedRecipe] = useState(null);
+
+  // 抓表
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(CSV_URL);
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) throw new Error('空白 CSV');
+
+        const header = rows[0].map(h => (h || '').trim());
+        const idx = nameList => header.findIndex(h => nameList.some(n => h === n || h.toLowerCase() === n.toLowerCase()));
+
+        const colTitle = idx(['料理名稱','菜名','title','名稱']);
+        const colIntro = idx(['描述','一句話介紹','介紹','intro','description']);
+        const colIng   = idx(['材料','食材','ingredients']);
+        const colSteps = idx(['料理步驟','步驟','作法','做法','steps']);
+        const colCat   = idx(['分類','類別','category']);
+        const colImg   = idx(['圖片URL','圖片','圖片連結','image','imageurl']);
+
+        const data = rows.slice(1)
+          .filter(r => r.some(c => (c || '').trim() !== ''))
+          .map((r, i) => ({
+            id: String(i + 1),
+            title: (r[colTitle] || '').trim(),
+            intro: (r[colIntro] || '').trim(),
+            ingredients: (r[colIng] || '').trim(),
+            steps: (r[colSteps] || '').trim(),
+            category: (r[colCat] || 'all').trim(),
+            imageUrl: (r[colImg] || '').trim(),
+          }))
+          .filter(it => it.title);
+
+        setRecipes(data);
+        setSheetErr('');
+      } catch (e) {
+        setSheetErr(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const openDetail = (item) => {
+    setSelectedRecipe(item);
+    setDetailOpen(true);
   };
 
   const renderRecipeItem = ({item}) => (
-    <TouchableOpacity style={styles.recipeCard} onPress={() => console.log('點擊了食譜:', item.title)}>
+    <TouchableOpacity style={styles.recipeCard} onPress={() => openDetail(item)} activeOpacity={0.85}>
       <View style={styles.recipeTextContent}>
         <View style={styles.recipeTitleRow}>
-          <Text style={styles.recipeTitle}>{item.title}</Text>
+          <Text style={styles.recipeTitle} numberOfLines={1}>
+            {item.title || '未命名食譜'}
+          </Text>
           <MaterialCommunityIcons name="bookmark-outline" size={20} color="#777" />
         </View>
-        <Text style={styles.recipeDescription}>{item.description}</Text>
-        <Text style={styles.recipeIngredientsTitle}>所需食材:</Text>
-        <Text style={styles.recipeIngredients}>{item.ingredients}</Text>
+
+        {!!item.intro && (
+          <Text style={styles.recipeDescription} numberOfLines={2}>
+            {item.intro}
+          </Text>
+        )}
+
+        {!!item.ingredients && (
+          <>
+            <Text style={styles.recipeIngredientsTitle}>所需食材：</Text>
+            <Text style={styles.recipeIngredients} numberOfLines={2} ellipsizeMode="tail">
+              {item.ingredients}
+            </Text>
+          </>
+        )}
       </View>
-      {item.image && <Image source={item.image} style={styles.recipeImage} />}
+
+      <View style={styles.recipeImageBox}>
+        {item.imageUrl ? (
+          <Image source={{uri: item.imageUrl}} style={styles.recipeImageReal} />
+        ) : (
+          <View style={styles.recipeImagePlaceholder} />
+        )}
+      </View>
     </TouchableOpacity>
   );
 
+  const listData = recipes;
+
   return (
     <View style={styles.homeScreenContainer}>
-      <Animated.FlatList
-        data={recipesData}
-        renderItem={renderRecipeItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={[styles.recipeListContent, {paddingTop: HEADER_HEIGHT}]}
-        style={styles.recipeList}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
-        )}
-        scrollEventThrottle={16}
-      />
+      {loading ? (
+        <View style={{flex:1, alignItems:'center', justifyContent:'center'}}>
+          <ActivityIndicator size="large" color="#FC6E2A" />
+          <Text style={{marginTop:8, color:'#888'}}>載入食譜中…</Text>
+          {!!sheetErr && <Text style={{marginTop:8, color:'#d33'}}>錯誤：{sheetErr}</Text>}
+        </View>
+      ) : (
+        <Animated.FlatList
+          data={listData}
+          renderItem={renderRecipeItem}
+          keyExtractor={item => item.id}
+          contentContainerStyle={[styles.recipeListContent, {paddingTop: HEADER_HEIGHT}]}
+          style={styles.recipeList}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: true }
+          )}
+          scrollEventThrottle={16}
+        />
+      )}
 
       <View style={[styles.headerContainer, {height: HEADER_HEIGHT}]}>
         <Animated.View style={[styles.headerBg, { opacity: bgOpacity }]}>
-          <BlurView
-            style={StyleSheet.absoluteFill}
-            blurType="light"
-            blurAmount={12}
-            reducedTransparencyFallbackColor="white"
-          />
+          <BlurView style={StyleSheet.absoluteFill} blurType="light" blurAmount={12} reducedTransparencyFallbackColor="white" />
           <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.5)' }]} />
         </Animated.View>
 
@@ -167,10 +338,10 @@ function HomeScreen() {
         <View style={styles.topHorizontalLine} />
 
         <View style={styles.recipeButtonsContainer}>
-          <TouchableOpacity style={styles.recipeButton1InHome} onPress={handleRecipePress} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.recipeButton1InHome} activeOpacity={0.7}>
             <Text style={styles.recipeButtonText1}>推薦食譜</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.recipeButton2InHome} onPress={handleRecipePress} activeOpacity={0.7}>
+          <TouchableOpacity style={styles.recipeButton2InHome} activeOpacity={0.7}>
             <Text style={styles.recipeButtonText2}>已收藏食譜</Text>
           </TouchableOpacity>
         </View>
@@ -182,30 +353,25 @@ function HomeScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.catStripContent}>
             {categories1.map(category => {
               const isActive = activeCategory === category.id;
+              const base = (
+                <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
+              );
 
               if (category.id === 'all') {
                 return (
                   <TouchableOpacity key={category.id} activeOpacity={0.85} onPress={() => setActiveCategory(category.id)}>
-                    <View style={[styles.catAll, isActive && styles.catChipActive]}>
-                      <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
-                    </View>
+                    <View style={[styles.catAll, isActive && styles.catChipActive]}>{base}</View>
                   </TouchableOpacity>
                 );
               }
-
               return (
-                <TouchableOpacity
-                  key={category.id}
-                  activeOpacity={0.85}
-                  onPress={() => setActiveCategory(category.id)}
-                  style={[styles.catChip, isActive && styles.catChipActive]}
-                >
+                <TouchableOpacity key={category.id} activeOpacity={0.85} onPress={() => setActiveCategory(category.id)} style={[styles.catChip, isActive && styles.catChipActive]}>
                   {category.image && (
                     <View style={[styles.catImgWrap, isActive && styles.catImgWrapActive]}>
                       <Image source={category.image} style={styles.catImg} />
                     </View>
                   )}
-                  <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
+                  {base}
                 </TouchableOpacity>
               );
             })}
@@ -213,12 +379,50 @@ function HomeScreen() {
         </View>
       </View>
 
+      {/* 詳細面板（底部白卡） */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={detailOpen}
+        onRequestClose={() => setDetailOpen(false)}
+      >
+        <Pressable style={styles.sheetMask} onPress={() => setDetailOpen(false)} />
+        <View style={styles.sheetContainer}>
+          <ScrollView contentContainerStyle={{paddingBottom: 40}}>
+            <View style={styles.sheetHeroBox}>
+              {selectedRecipe?.imageUrl ? (
+                <Image source={{uri: selectedRecipe.imageUrl}} style={styles.sheetHeroImg} />
+              ) : (
+                <View style={styles.sheetHeroPlaceholder} />
+              )}
+            </View>
+
+            <View style={{paddingHorizontal: 18, paddingTop: 14, paddingBottom:20}}>
+              <Text style={styles.sheetTitle}>{selectedRecipe?.title || ''}</Text>
+
+              {!!selectedRecipe?.ingredients && (
+                <Text style={styles.sheetSub}>
+                  所需食材：<Text style={{color:'#333'}}>{selectedRecipe.ingredients}</Text>
+                </Text>
+              )}
+
+              {!!selectedRecipe?.steps && (
+                <>
+                  <Text style={styles.sheetStepsLabel}>步驟：</Text>
+                  <Text style={styles.sheetStepsText}>{selectedRecipe.steps}</Text>
+                </>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
       <StatusBar barStyle="dark-content" />
     </View>
   );
 }
 
-// === 聊天頁 ===
+/* ===================== 聊天頁 ===================== */
 function SpecialCenterScreen() {
   const [messages, setMessages] = useState([
     {id: '1', text: '哈嘍？今天吃啥呢？', sender: 'ai'},
@@ -277,61 +481,132 @@ function SpecialCenterScreen() {
   );
 }
 
-// === Explore + Stack ===
+/* ===================== Explore + Stack ===================== */
 function ExploreScreen() {
   const [activeCategory, setActiveCategory] = useState('all');
-  const {addToCart} = useContext(CartContext);
+  const { addToCart } = useContext(CartContext);
   const navigation = useNavigation();
 
-  const renderProductItem = ({item}) => (
-    <TouchableOpacity style={styles.productCard} onPress={() => navigation.navigate('ProductDetail', {product: item})} activeOpacity={0.7}>
-      <Image source={item.image} style={styles.productImage} />
-      <View style={styles.productInfo}>
-        <Text style={styles.productName}>{item.name}</Text>
-        <Text style={styles.productBrand}>{item.brand}</Text>
-      </View>
-    </TouchableOpacity>
-  );
+  // 從 Google 試算表抓的商品
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+
+  // 地圖查詢彈窗
+  const [mapVisible, setMapVisible] = useState(false);
+
+  // 將試算表「分類」文字對映到你現有 chips 的 id
+  const mapCategoryTextToId = (txt = '') => {
+    if (/稻|米|雜糧/.test(txt)) return 'rice';
+    if (/蔬菜/.test(txt)) return 'noodle';
+    if (/水果/.test(txt)) return 'soup';
+    if (/加工|特色/.test(txt)) return 'dessert';
+    if (/花卉/.test(txt)) return 'drink';
+    return 'drink2';
+  };
+
+  // 讀取 Google CSV（欄位：id、產品名稱、分類、產品介紹、去哪裡購買、產品圖片、產地、小農故事）
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(PRODUCTS_CSV_URL);
+        const text = await res.text();
+        const rows = parseCSV(text);
+        if (!rows.length) throw new Error('空白 CSV');
+
+        const header = rows[0].map(h => (h || '').trim());
+        const idx = names => header.findIndex(h => names.some(n => h === n || h.toLowerCase() === n.toLowerCase()));
+
+        const cId       = idx(['id','ID','編號']);
+        const cName     = idx(['產品名稱','品名','name','名稱','title']);
+        const cCat      = idx(['分類','類別','category']);
+        const cIntro    = idx(['產品介紹','介紹','說明','描述','intro']);
+        const cBuy      = idx(['去哪裡購買','哪裡可以購買','購買','購買資訊','where to buy']);
+        const cImg      = idx(['產品圖片','圖片URL','圖片','image','imageurl']);
+        const cOrigin   = idx(['產地','來源','產區','origin']);
+        const cStory    = idx(['小農故事','品牌故事','故事','story']);
+
+        const data = rows.slice(1)
+          .filter(r => r.some(c => (c || '').trim() !== ''))
+          .map((r, i) => {
+            const catText = (r[cCat] || '').trim();
+            return {
+              id: (r[cId] || String(i + 1)).trim(),
+              name: (r[cName] || '').trim(),
+              category: mapCategoryTextToId(catText),
+              categoryText: catText,
+              intro: (r[cIntro] || '').trim(),
+              whereToBuy: (r[cBuy] || '').trim(),
+              imageUrl: (r[cImg] || '').trim(),
+              origin: (r[cOrigin] || '').trim(),
+              story: (r[cStory] || '').trim(),
+            };
+          })
+          .filter(p => p.name);
+
+        setProducts(data);
+        setErr('');
+      } catch (e) {
+        setErr(String(e?.message || e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const filtered =
+    activeCategory === 'all' ? products : products.filter(p => p.category === activeCategory);
+
+  const renderProductItem = ({ item }) => {
+    const imageSource = item.imageUrl ? { uri: item.imageUrl } : null;
+    return (
+      <TouchableOpacity
+        style={styles.productCard}
+        onPress={() => navigation.navigate('ProductDetail', { product: item })}
+        activeOpacity={0.8}
+      >
+        {imageSource ? (
+          <Image source={imageSource} style={styles.productImage} />
+        ) : (
+          <View style={[styles.productImage, { backgroundColor: '#eee' }]} />
+        )}
+        <View style={styles.productInfo}>
+          <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
+          <Text style={styles.productBrand} numberOfLines={1}>{item.origin || '—'}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   const handleShoppingCartPress = () => navigation.navigate('ShoppingCart');
 
   return (
     <View style={styles.homeScreenContainer}>
+      {/* 標題 */}
       <View style={styles.headerTextBlock}>
         <Text style={styles.hualienTextInHome}>花蓮在地有機農產品</Text>
         <Text style={styles.subtitleTextInHome}>原來花蓮有這麼多在地小農</Text>
       </View>
 
+      {/* 購物車 */}
       <TouchableOpacity style={styles.shoppingCartButton} onPress={handleShoppingCartPress}>
         <Ionicons name="cart-outline" size={30} color="black" />
       </TouchableOpacity>
 
-      {/* 食品分類導航 (可左右滑動) */}
+      {/* 分類列（維持你的 UI） */}
       <View style={styles.categoryNavigationWrapper2}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.catStripContent}
-        >
-          {categories2.map((category) => {
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.catStripContent}>
+          {categories2.map(category => {
             const isActive = activeCategory === category.id;
-
             if (category.id === 'all') {
               return (
-                <TouchableOpacity
-                  key={category.id}
-                  activeOpacity={0.85}
-                  onPress={() => setActiveCategory(category.id)}
-                >
+                <TouchableOpacity key={category.id} activeOpacity={0.85} onPress={() => setActiveCategory(category.id)}>
                   <View style={[styles.catAll, isActive && styles.catChipActive]}>
-                    <Text style={[styles.catText, isActive && styles.catTextActive]}>
-                      {category.name}
-                    </Text>
+                    <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
                   </View>
                 </TouchableOpacity>
               );
             }
-
             return (
               <TouchableOpacity
                 key={category.id}
@@ -339,37 +614,52 @@ function ExploreScreen() {
                 onPress={() => setActiveCategory(category.id)}
                 style={[styles.catChip, isActive && styles.catChipActive]}
               >
-                <Text style={[styles.catText, isActive && styles.catTextActive]}>
-                  {category.name}
-                </Text>
+                <Text style={[styles.catText, isActive && styles.catTextActive]}>{category.name}</Text>
               </TouchableOpacity>
             );
           })}
         </ScrollView>
       </View>
 
+      {/* 標題列右側「地圖查詢」 */}
       <View style={styles.productListHeader}>
         <Text style={styles.productListTitle}>產品品牌</Text>
-        <View style={{flexDirection: 'row', alignItems: 'center'}}>
-          <Text style={styles.seeAllText}>See All</Text>
-          <AntDesign name="right" size={16} color="gray" style={{marginLeft: 5}} />
-        </View>
+        <TouchableOpacity onPress={() => setMapVisible(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Text style={styles.seeAllText}>地圖查詢</Text>
+        </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={productsData}
-        renderItem={renderProductItem}
-        keyExtractor={item => item.id}
-        numColumns={2}
-        columnWrapperStyle={styles.row}
-        contentContainerStyle={styles.productListContent}
-        style={styles.productList}
-      />
+      {/* 列表 */}
+      {loading ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color="#FC6E2A" />
+          {!!err && <Text style={{ marginTop: 8, color: '#d33' }}>{err}</Text>}
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          renderItem={renderProductItem}
+          keyExtractor={item => item.id}
+          numColumns={2}
+          columnWrapperStyle={styles.row}
+          contentContainerStyle={styles.productListContent}
+          style={styles.productList}
+        />
+      )}
+
+      {/* 地圖彈窗 */}
+      <Modal visible={mapVisible} transparent animationType="fade" onRequestClose={() => setMapVisible(false)}>
+        <Pressable style={styles.mapMask} onPress={() => setMapVisible(false)} />
+        <View style={styles.mapCard}>
+          <Image source={MAP_IMAGE} style={styles.mapImg} />
+        </View>
+      </Modal>
 
       <StatusBar barStyle="dark-content" />
     </View>
   );
 }
+
 
 function ShoppingCartScreen() {
   const {cartItems, updateQuantity} = useContext(CartContext);
@@ -426,12 +716,19 @@ function ShoppingCartScreen() {
   );
 }
 
-function ProductDetailScreen({route}) {
+function ProductDetailScreen({ route }) {
   const navigation = useNavigation();
-  const {product} = route.params;
-  const {width} = Dimensions.get('window');
-  const {addToCart} = useContext(CartContext);
+  const { product } = route.params;
+  const { addToCart } = useContext(CartContext);
   const [quantity, setQuantity] = useState(1);
+
+  const imageSource =
+    product?.image ? product.image :
+    product?.imageUrl ? { uri: product.imageUrl } : null;
+
+  const origin = product?.brand || product?.origin || '';
+  const whereToBuy = product?.whereToBuy || '';
+  const story = product?.story || '';
 
   return (
     <View style={styles.productDetailContainer}>
@@ -443,9 +740,14 @@ function ProductDetailScreen({route}) {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.productInfoContainer}>
-          <Image source={product.image} style={styles.productImageDetail} />
-          <Text style={styles.productNameDetail}>{product.name}</Text>
-          <Text style={styles.productOriginDetail}>{product.brand}</Text>
+          {imageSource ? (
+            <Image source={imageSource} style={styles.productImageDetail} />
+          ) : (
+            <View style={[styles.productImageDetail, { backgroundColor: '#eee' }]} />
+          )}
+
+          <Text style={styles.productNameDetail}>{product?.name || ''}</Text>
+          <Text style={styles.productOriginDetail}>{origin}</Text>
 
           <View style={styles.quantitySelector}>
             <TouchableOpacity onPress={() => setQuantity(q => Math.max(1, q - 1))} style={styles.quantityButton}>
@@ -461,30 +763,35 @@ function ProductDetailScreen({route}) {
             <Text style={styles.addToCartButtonText}>加入購物車</Text>
           </TouchableOpacity>
 
-          <View style={styles.quoteContainer}>
-            <Text style={styles.quoteText}>
-              "銀川 是我父親的名字, 我希望銀川能帶著父親的傳承, 帶著土地的傳承, 一直走下去。"
-            </Text>
-            <Text style={styles.quoteAuthor}>— 銀川有機米創辦人 劉兆霖</Text>
-          </View>
+          {/* 去哪裡購買 */}
+          {!!whereToBuy && (
+            <View style={styles.purchaseContainer}>
+              <Text style={styles.purchaseTitle}>|  哪裡可以購買  |</Text>
+              <Text style={styles.purchaseLocation}>{whereToBuy}</Text>
+            </View>
+          )}
 
-          <View style={styles.purchaseContainer}>
-            <Text style={styles.purchaseTitle}>|  哪裡可以購買  |</Text>
-            <Text style={styles.purchaseLocation}>
-              銀川有機米建立於1996年，農夫賴兆炫，沿用父親的名字 「銀川」 來命名，於花蓮擁有340公頃的有機農田與143位農友攜手合作。超過25年的有機耕種經驗，更曾獲得十大神農獎、十大有機農業貢獻單位獎等殊榮。並通過台灣有機驗證、美國USDA、歐盟EU、清真、ISO22000及HACCP雙驗證，是全台最大的有機農場。
-            </Text>
-            <Text style={styles.purchaseTitle}>|  純淨產地—台灣花蓮富里  |</Text>
-            <Text style={styles.purchaseLocation}>
-              銀川有機米主要種植於花蓮深土區域，這裡污染極低，日夜溫差大，水源來自麥飯石礦區，成微鹼性，每一粒米都是喝著這純淨泉水長大！粒粒飽滿香甜，擁有最好的品質。
-            </Text>
-          </View>
+          {/* 產地 */}
+          {!!origin && (
+            <View style={styles.purchaseContainer}>
+              <Text style={styles.purchaseTitle}>|  純淨產地  |</Text>
+              <Text style={styles.purchaseLocation}>{origin}</Text>
+            </View>
+          )}
+
+          {/* 小農故事 */}
+          {!!story && (
+            <View style={styles.purchaseContainer}>
+              <Text style={styles.purchaseTitle}>|  小農故事  |</Text>
+              <Text style={styles.purchaseLocation}>{story}</Text>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>
   );
 }
 
-// === Stack for Explore ===
 function ExploreStackScreen() {
   return (
     <Stack.Navigator>
@@ -495,51 +802,83 @@ function ExploreStackScreen() {
   );
 }
 
-/** ===================== MainTabs（你原本的三個分頁） ===================== **/
+/* ===================== MainTabs ===================== */
 function MainTabs() {
+  const navigation = useNavigation();
+  const [showDisclaimer, setShowDisclaimer] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const flag = await AsyncStorage.getItem('disclaimerAccepted_v1');
+        if (flag !== '1') setShowDisclaimer(true);
+      } catch {}
+    })();
+  }, []);
+
+  const handleAgree = async () => {
+    await AsyncStorage.setItem('disclaimerAccepted_v1', '1');
+    setShowDisclaimer(false);
+  };
+
+  const handleDecline = async () => {
+    await AsyncStorage.removeItem('disclaimerAccepted_v1');
+    // 回登入頁
+    navigation.reset({index: 0, routes: [{name: 'Login'}]});
+  };
+
   return (
-    <Tab.Navigator
-      initialRouteName="Home"
-      screenOptions={({route}) => ({
-        tabBarIcon: ({focused, color}) => {
-          let iconName; let IconComponent = null; let iconSize = 24;
+    <>
+      <Tab.Navigator
+        initialRouteName="Home"
+        screenOptions={({route}) => ({
+          tabBarIcon: ({focused, color}) => {
+            let iconName; let IconComponent = null; let iconSize = 24;
 
-          if (route.name === 'Home') {
-            IconComponent = MaterialCommunityIcons;
-            iconName = focused ? 'home' : 'home-outline';
-            iconSize = 25;
-          } else if (route.name === 'SpecialCenter') {
-            IconComponent = MaterialCommunityIcons;
-            iconName = focused ? 'cube' : 'cube-outline';
-            iconSize = 38;
-            return (
-              <View style={styles.specialButtonContainer}>
-                <IconComponent name={iconName} size={iconSize} color={focused ? '#fff' : '#000'} />
-              </View>
-            );
-          } else if (route.name === 'Explore') {
-            IconComponent = FontAwesome5;
-            iconName = 'compass';
-          }
+            if (route.name === 'Home') {
+              IconComponent = MaterialCommunityIcons;
+              iconName = focused ? 'home' : 'home-outline';
+              iconSize = 25;
+            } else if (route.name === 'SpecialCenter') {
+              IconComponent = MaterialCommunityIcons;
+              iconName = focused ? 'cube' : 'cube-outline';
+              iconSize = 38;
+              return (
+                <View style={styles.specialButtonContainer}>
+                  <IconComponent name={iconName} size={iconSize} color={focused ? '#fff' : '#000'} />
+                </View>
+              );
+            } else if (route.name === 'Explore') {
+              IconComponent = FontAwesome5;
+              iconName = 'compass';
+            }
 
-          if (!IconComponent) return <View />;
-          return <IconComponent name={iconName} size={iconSize} color={color} />;
-        },
-        tabBarActiveTintColor: '#FC6E2A',
-        tabBarInactiveTintColor: 'gray',
-        tabBarStyle: styles.tabBarStyle,
-        tabBarShowLabel: false,
-        headerShown: false,
-      })}
-    >
-      <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="SpecialCenter" component={SpecialCenterScreen} />
-      <Tab.Screen name="Explore" component={ExploreStackScreen} />
-    </Tab.Navigator>
+            if (!IconComponent) return <View />;
+            return <IconComponent name={iconName} size={iconSize} color={color} />;
+          },
+          tabBarActiveTintColor: '#FC6E2A',
+          tabBarInactiveTintColor: 'gray',
+          tabBarStyle: styles.tabBarStyle,
+          tabBarShowLabel: false,
+          headerShown: false,
+        })}
+      >
+        <Tab.Screen name="Home" component={HomeScreen} />
+        <Tab.Screen name="SpecialCenter" component={SpecialCenterScreen} />
+        <Tab.Screen name="Explore" component={ExploreStackScreen} />
+      </Tab.Navigator>
+
+      {/* 免責聲明（第一次登入顯示） */}
+      <DisclaimerModal
+        visible={showDisclaimer}
+        onAgree={handleAgree}
+        onDecline={handleDecline}
+      />
+    </>
   );
 }
 
-/** ===================== App Root：Auth + Main ===================== **/
+/* ===================== App Root ===================== */
 export default function App() {
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => {
@@ -553,12 +892,10 @@ export default function App() {
       <View style={styles.appContainer}>
         <NavigationContainer>
           <RootStack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Login">
-            {/* Auth flow */}
             <RootStack.Screen name="Login" component={LoginScreen} />
             <RootStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
             <RootStack.Screen name="Verify" component={VerifyScreen} />
             <RootStack.Screen name="SignUp" component={SignUpScreen} />
-            {/* 登入後的主程式 */}
             <RootStack.Screen name="Main" component={MainTabs} />
           </RootStack.Navigator>
         </NavigationContainer>
@@ -567,7 +904,7 @@ export default function App() {
   );
 }
 
-// === Styles（你的原樣式） ===
+/* ===================== Styles ===================== */
 const styles = StyleSheet.create({
   appContainer: {flex: 1, backgroundColor: 'white'},
   homeScreenContainer: {flex: 1, backgroundColor: '#fff'},
@@ -597,6 +934,7 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 8,
   },
+
   headerTextBlock: {position: 'absolute', left: 30, top: 30, zIndex: 10},
   hualienTextInHome: {fontWeight: 'bold', fontSize: 20, color: '#FC6E2A'},
   subtitleTextInHome: {fontFamily: 'Arial', fontSize: 12, color: '#676767', marginTop: 2},
@@ -609,25 +947,41 @@ const styles = StyleSheet.create({
   buttonUnderlineLeft: {position: 'absolute', left: 15, width: (screenWidth - 40) / 2, height: 5, top: 140, backgroundColor: '#B6B6B6', zIndex: 5},
   buttonUnderlineRight: {position: 'absolute', left: 15 + (screenWidth - 40) / 2 + 10, width: (screenWidth - 40) / 2, height: 5, top: 140, backgroundColor: '#B6B6B6', zIndex: 5},
   categoryNavigationWrapper1: {position: 'absolute', left: 0, width: screenWidth, top: 150},
-  categoryNavigationWrapper2: {position: 'absolute', left: 0, width: screenWidth, top: 90},
+
   headerContainer: {position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10},
   headerBg: {...StyleSheet.absoluteFillObject, overflow: 'hidden'},
-  recipeList: {flex: 1},
+
+  recipeList: {flex: 1, paddingTop: 10},
   recipeListContent: {paddingBottom: 90, paddingHorizontal: 15},
+
+  // 卡片
   recipeCard: {
-    flexDirection: 'row', backgroundColor: '#FFD8C0', borderRadius: 50, marginVertical: 10,
-    shadowColor: '#000', shadowOffset: {width: 5, height: 5}, shadowOpacity: 0.1, shadowRadius: 5, elevation: 5, overflow: 'hidden',
+    flexDirection: 'row',
+    backgroundColor: '#FFD8C0',
+    borderRadius: 30,
+    marginVertical: 5,
+    shadowColor: '#000',
+    shadowOffset: {width: 5, height: 5},
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 8,
+    overflow: 'hidden',
     width: screenWidth - 30,
+    minHeight: 110,
   },
-  recipeTextContent: {flex: 8, justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 25},
+  recipeTextContent: {flex: 8, justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 18},
   recipeTitleRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5},
   recipeTitle: {fontWeight: 'bold', fontSize: 18, color: '#FC6E2A'},
-  recipeDescription: {fontWeight: 'bold', fontSize: 12, color: '#000000b6', marginBottom: 10},
+  recipeDescription: {fontWeight: 'bold', fontSize: 12, color: '#000000b6', marginBottom: 8},
   recipeIngredientsTitle: {fontFamily: 'Sen-Bold', fontSize: 10, color: '#555', marginBottom: 2},
-  recipeIngredients: {fontFamily: 'Arial', fontSize: 9, color: '#888', lineHeight: 14},
-  recipeImage: {flex: 1, width: '100%', height: '100%', resizeMode: 'cover', minWidth: 100},
+  recipeIngredients: {fontFamily: 'Arial', fontSize: 11, color: '#333', lineHeight: 16},
 
-  // Explore
+  recipeImageBox: {flex: 1, minWidth: 100},
+  recipeImagePlaceholder: {flex: 1, backgroundColor: '#ffe8d9'},
+  recipeImageReal: {flex: 1, width: '100%', height: '100%', resizeMode: 'cover'},
+
+  // Explore（原樣）
+  categoryNavigationWrapper2: {position: 'absolute', left: 0, width: screenWidth, top: 90},
   shoppingCartButton: {left: 320, top: 30, width: 50, height: 50, borderRadius: 50, backgroundColor: '#E6E6E6', justifyContent: 'center', alignItems: 'center'},
   productListHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginTop: 10, marginBottom: 10},
   productListTitle: {fontWeight: 'bold', fontSize: 20, color: '#32343E', left: 10, top: 125},
@@ -641,7 +995,7 @@ const styles = StyleSheet.create({
   productName: {fontWeight: 'bold', fontSize: 15, color: '#333', marginBottom: 3},
   productBrand: {fontFamily: 'Arial', fontSize: 12, color: '#666'},
 
-  // ScrollView 分類列
+  // 分類橫條
   catStripContent: { paddingHorizontal: 16, paddingVertical: 10 },
   catAll: {
     width: 56, height: 56, borderRadius: 28, backgroundColor: '#FFFFFF',
@@ -710,10 +1064,74 @@ const styles = StyleSheet.create({
   purchaseLocation: {fontSize: 16, marginTop: 5, color: '#666', marginBottom: 50},
   addToCartButton: { backgroundColor: '#FC6E2A', paddingVertical: 12, paddingHorizontal: 15, borderRadius: 50 },
   addToCartButtonText: { color: '#fff', fontFamily: 'Sen-Bold', fontSize: 15 },
-
   quantitySelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginVertical: 30 },
   quantityButton: { width: 40, height: 40, backgroundColor: '#f0f0f0', borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   quantityButtonText: { fontSize: 20, fontWeight: 'bold', color: '#333' },
   quantityValue: { fontSize: 22, fontWeight: 'bold', marginHorizontal: 20 },
+
+  // ====== 底部白色面板 ======
+  sheetMask: {flex:1, backgroundColor:'rgba(0,0,0,0.45)'},
+  sheetContainer: {
+    position:'absolute', left:0, right:0, bottom:0,
+    backgroundColor:'#fff',
+    borderTopLeftRadius:24, borderTopRightRadius:24,
+    maxHeight:'86%',
+    shadowColor:'#000', shadowOffset:{width:0, height:-2}, shadowOpacity:0.15, shadowRadius:8, elevation:10,
+  },
+  sheetHeroBox: {width:'100%', height: 240, backgroundColor:'#eee', borderTopLeftRadius:24, borderTopRightRadius:24, overflow:'hidden'},
+  sheetHeroImg: {width:'100%', height:'100%', resizeMode:'cover'},
+  sheetHeroPlaceholder: {flex:1, backgroundColor:'#f6f6f6'},
+  sheetTitle: {fontSize: 24, fontWeight:'800', color:'#FC6E2A',marginTop:20 ,marginBottom: 20},
+  sheetSub: {fontSize: 14, color:'#666', marginBottom: 12},
+  sheetStepsLabel: {fontSize: 16, color:'#111', fontWeight:'700', marginTop: 25, marginBottom: 15},
+  sheetStepsText: {fontSize: 15, lineHeight: 22, color:'#333'},
+
+  // ====== 免責聲明樣式 ======
+  disclaimerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+  },
+  disclaimerCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 6},
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  disclaimerTitle: {fontSize: 20, fontWeight: '800', color: '#FC6E2A', marginBottom: 10},
+  disclaimerBody: {maxHeight: 260},
+  disclaimerParagraph: {fontSize: 14, color: '#333', lineHeight: 22, marginBottom: 10},
+  disclaimerCheckRow: {flexDirection: 'row', alignItems: 'center', marginTop: 6},
+  disclaimerCheckbox: {
+    width: 20, height: 20, borderRadius: 4, borderWidth: 1.4, borderColor: '#C9CFD8',
+    alignItems: 'center', justifyContent: 'center', marginRight: 8, backgroundColor: '#fff',
+  },
+  disclaimerCheckboxOn: {backgroundColor: '#FC6E2A', borderColor: '#FC6E2A'},
+  disclaimerCheckText: {fontSize: 14, color: '#333'},
+  disclaimerPrimaryBtn: {
+    marginTop: 14, height: 48, borderRadius: 12, backgroundColor: '#FC6E2A',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  disclaimerPrimaryText: {color: '#fff', fontSize: 16, fontWeight: '700'},
+  disclaimerGhostBtn: {alignSelf: 'center', paddingVertical: 10},
+  disclaimerGhostText: {color: '#666', fontSize: 14, textDecorationLine: 'underline'},
+   // ---- 地圖查詢 Modal ----
+   mapMask: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+   mapCard: {
+     position: 'absolute', left: 16, right: 16, top: 80, bottom: 80,
+     backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden',
+     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 8, elevation: 10,
+   },
+   mapImg: { width: '100%', height: '100%', resizeMode: 'cover' },
 });
-123
+
